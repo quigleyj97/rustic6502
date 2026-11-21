@@ -1,3 +1,7 @@
 [submodule "tests/6502_65C02_functional_tests"]
 	path = tests/6502_65C02_functional_tests
 	url = https://github.com/Klaus2m5/6502_65C02_functional_tests.git
+[submodule "tests/65x02"]
+	path = tests/65x02
+	url = https://github.com/SingleStepTests/65x02.git
+	shallow = true
