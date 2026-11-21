@@ -145,3 +145,39 @@ fn pluggable_variant_with_aliases() {
     let nl = Netlist::from_native(&text).unwrap();
     assert_eq!(nl.node("res"), nl.node("reset"));
 }
+
+#[test]
+fn node_trace_matches_bus() {
+    use rustic6502::{NodeTracer, Probe, TraceFormat};
+    let nl = builtin_netlist();
+    let probes = Probe::resolve(&nl, &["clk0", "sync", "ab*"]).unwrap();
+    // `ab*` also matches `abl*`/`abh*`; pick out the 16 pads by name.
+    let pad = |i: usize| {
+        probes
+            .iter()
+            .position(|p| p.name == format!("ab{i}"))
+            .unwrap()
+    };
+    let mut cpu = cpu_with(&[0xea, 0xea, 0x4c, 0x00, 0x00]); // NOP; NOP; JMP $0000
+    let mut t = NodeTracer::new(Vec::new(), TraceFormat::Table, probes.clone(), "6502").unwrap();
+    let mut expected = Vec::new();
+    for _ in 0..40 {
+        cpu.half_step();
+        t.sample(&cpu.sim, cpu.half_cycles).unwrap();
+        expected.push(cpu.address_bus());
+    }
+    let text = String::from_utf8(t.finish().unwrap()).unwrap();
+    let mut lines = text.lines();
+    assert!(
+        lines
+            .next()
+            .unwrap()
+            .starts_with("# half_cycle clk0 sync ab0")
+    );
+    for (line, want) in lines.zip(&expected) {
+        let cols: Vec<&str> = line.split(' ').collect();
+        assert_eq!(cols.len(), probes.len() + 1);
+        let ab = (0..16).fold(0u16, |acc, i| acc | ((cols[pad(i) + 1] == "1") as u16) << i);
+        assert_eq!(ab, *want, "line '{line}'");
+    }
+}

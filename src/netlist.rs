@@ -116,6 +116,25 @@ impl Netlist {
         self.names.get(name).copied()
     }
 
+    /// Every `(name, node)` pair whose name matches `pattern`, in name
+    /// order. `*` matches any run of characters and `?` any single
+    /// character; a pattern without wildcards matches only that exact name.
+    pub fn match_names<'a>(&'a self, pattern: &'a str) -> impl Iterator<Item = (&'a str, NodeId)> {
+        self.names
+            .iter()
+            .filter(move |(k, _)| glob_match(pattern, k))
+            .map(|(k, &n)| (k.as_str(), n))
+    }
+
+    /// Named nodes, each with all of its names (in name order).
+    pub fn names_by_node(&self) -> BTreeMap<NodeId, Vec<&str>> {
+        let mut out: BTreeMap<NodeId, Vec<&str>> = BTreeMap::new();
+        for (k, &n) in &self.names {
+            out.entry(n).or_default().push(k);
+        }
+        out
+    }
+
     /// Load a Visual6502-style data directory.
     pub fn from_visual6502_dir(dir: &Path, opts: &Visual6502Options) -> Result<Self, NetlistError> {
         let read = |f: &str| {
@@ -419,6 +438,33 @@ impl Netlist {
     }
 }
 
+/// Shell-style wildcard match: `*` is any run of characters (including
+/// none), `?` is exactly one character. Everything else is literal, so node
+/// names such as `#(A+B)0` can be matched directly.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let (mut pi, mut ti) = (0, 0);
+    // Position of the last `*` seen and the text position it was tried at.
+    let mut star: Option<(usize, usize)> = None;
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || (p[pi] != '*' && p[pi] == t[ti])) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some((pi, ti));
+            pi += 1;
+        } else if let Some((sp, st)) = star {
+            pi = sp + 1;
+            ti = st + 1;
+            star = Some((sp, st + 1));
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
+}
+
 /// A minimal parser for the subset of JavaScript used by the Visual6502 data
 /// files: `var name = <literal>;` where literals are numbers, strings,
 /// booleans, arrays and objects with identifier/string keys.
@@ -686,6 +732,19 @@ mod tests {
         assert_eq!(nl.node("bad"), None);
         let back = Netlist::from_native(&nl.to_native()).unwrap();
         assert_eq!(back, nl);
+    }
+
+    #[test]
+    fn globs() {
+        assert!(glob_match("ab*", "ab12"));
+        assert!(glob_match("ab*", "ab"));
+        assert!(!glob_match("ab*", "xab"));
+        assert!(glob_match("a?", "a7"));
+        assert!(!glob_match("a?", "a"));
+        assert!(glob_match("*", ""));
+        assert!(glob_match("#(A+B)0", "#(A+B)0"));
+        assert!(glob_match("*c*k*", "clock"));
+        assert!(!glob_match("*c*k", "clocks"));
     }
 
     #[test]

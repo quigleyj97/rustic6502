@@ -44,9 +44,7 @@ fn klaus_functional_test() {
     // the same opcode again within a few cycles.
     let mut last: Option<(u16, u64)> = None;
     let trap = loop {
-        let pc = cpu
-            .run_to_sync(MAX_CYCLES * 2)
-            .expect("no opcode fetch");
+        let pc = cpu.run_to_sync(MAX_CYCLES * 2).expect("no opcode fetch");
         if let Some((prev, at)) = last
             && prev == pc
             && cpu.half_cycles - at <= 8
@@ -62,7 +60,8 @@ fn klaus_functional_test() {
 
     let cycles = (cpu.half_cycles - start) / 2;
     assert_eq!(
-        trap, SUCCESS_PC,
+        trap,
+        SUCCESS_PC,
         "failure trap at ${trap:04X} after {cycles} cycles (see \
          bin_files/6502_functional_test.lst); {}",
         cpu.status()

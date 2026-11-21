@@ -4,8 +4,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
-use rustic6502::Cpu6502;
-use rustic6502::netlist::{Netlist, Visual6502Options};
+use rustic6502::netlist::{Netlist, Visual6502Options, glob_match};
+use rustic6502::{Cpu6502, NodeTracer, Probe, TraceFormat};
 
 #[derive(Parser)]
 #[command(
@@ -44,6 +44,17 @@ enum Cmd {
         #[arg(long)]
         netlist: Option<String>,
     },
+    /// List the named nodes of a netlist, one `name node` pair per line.
+    Nodes {
+        #[arg(long)]
+        netlist: Option<String>,
+        /// Group by node instead: `node name1 name2 ...` per line, in node
+        /// order.
+        #[arg(long)]
+        by_node: bool,
+        /// Only list names matching these patterns (`*` and `?` wildcards).
+        patterns: Vec<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -70,6 +81,17 @@ struct RunArgs {
     /// Print the chip status at every opcode fetch.
     #[arg(long)]
     trace_instructions: bool,
+    /// Record these nodes every half-cycle: names, wildcard patterns (`ab*`,
+    /// `*` for every named node) or node numbers; repeat or comma-separate.
+    /// Use `rustic6502 nodes` to list the names.
+    #[arg(long, value_name = "NODES")]
+    trace_node: Vec<String>,
+    /// File to write the node trace to (stdout if omitted).
+    #[arg(long, value_name = "FILE", requires = "trace_node")]
+    trace_out: Option<PathBuf>,
+    /// Node trace format: `vcd` (Value Change Dump) or `table`.
+    #[arg(long, default_value = "vcd", requires = "trace_node")]
+    trace_format: TraceFormat,
     /// Stop when an opcode is fetched from this address (hex).
     #[arg(long, value_parser = parse_hex16)]
     stop_pc: Vec<u16>,
@@ -156,6 +178,30 @@ fn main() -> ExitCode {
             }
             true
         }),
+        Cmd::Nodes {
+            netlist,
+            by_node,
+            patterns,
+        } => load_netlist(netlist.as_deref()).map(|nl| {
+            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+            let keep =
+                |name: &str| patterns.is_empty() || patterns.iter().any(|p| glob_match(p, name));
+            if by_node {
+                for (node, names) in nl.names_by_node() {
+                    let names: Vec<&str> = names.into_iter().filter(|n| keep(n)).collect();
+                    if !names.is_empty() {
+                        let _ = writeln!(out, "{node} {}", names.join(" "));
+                    }
+                }
+            } else {
+                for (name, node) in &nl.names {
+                    if keep(name) {
+                        let _ = writeln!(out, "{name} {node}");
+                    }
+                }
+            }
+            true
+        }),
     };
     match res {
         Ok(true) => ExitCode::SUCCESS,
@@ -200,13 +246,47 @@ fn run(args: RunArgs) -> Result<bool, String> {
         }));
     }
 
+    let mut tracer = if args.trace_node.is_empty() {
+        None
+    } else {
+        if args.trace_out.is_none()
+            && (args.trace
+                || args.trace_instructions
+                || args.putc.is_some()
+                || !args.dump.is_empty())
+        {
+            return Err(
+                "--trace-node writes to stdout, which --trace, --trace-instructions, \
+                        --putc and --dump also use; pass --trace-out FILE"
+                    .into(),
+            );
+        }
+        let probes = Probe::resolve(&nl, &args.trace_node)?;
+        let out: Box<dyn std::io::Write> = match &args.trace_out {
+            Some(path) => Box::new(std::io::BufWriter::new(
+                std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            )),
+            None => Box::new(std::io::BufWriter::new(std::io::stdout())),
+        };
+        let t = NodeTracer::new(out, args.trace_format, probes, &nl.chip)
+            .map_err(|e| format!("node trace: {e}"))?;
+        Some(t)
+    };
+    let trace_err = |e: std::io::Error| format!("node trace: {e}");
+
     cpu.reset();
+    if let Some(t) = tracer.as_mut() {
+        t.sample(&cpu.sim, cpu.half_cycles).map_err(trace_err)?;
+    }
     let start = Instant::now();
     let mut last_fetch: Option<(u16, u64)> = None;
     let mut stopped_at = None;
     let max_half = args.cycles.saturating_mul(2);
     while cpu.half_cycles < max_half {
         cpu.half_step();
+        if let Some(t) = tracer.as_mut() {
+            t.sample(&cpu.sim, cpu.half_cycles).map_err(trace_err)?;
+        }
         if let Some(every) = args.progress
             && every > 0
             && cpu.half_cycles % (every * 2) == 0
@@ -248,6 +328,9 @@ fn run(args: RunArgs) -> Result<bool, String> {
         }
     }
     let elapsed = start.elapsed().as_secs_f64();
+    if let Some(t) = tracer {
+        t.finish().map_err(trace_err)?;
+    }
     let cycles = cpu.half_cycles / 2;
     eprintln!();
     match stopped_at {

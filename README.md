@@ -22,6 +22,41 @@ The full address bus, from $0000-$FFFF, is covered by a virtual RAM block.
 Exortibantly luxurious by the standards of the time, but these days you can
 run the simulator on consumer devices with 750 thousand times more memory :)
 
+### Tracing nodes
+
+You can record any of the netlist's nodes every half-cycle, for example to
+check an HDL implementation of the chip against this simulation, node by
+node. To list the node names (`name node` per line; `--by-node` groups the
+aliases of each node on one line; patterns may use `*` and `?`):
+
+```sh
+./target/release/rustic6502 nodes            # every named node
+./target/release/rustic6502 nodes 'ab*' 'db?' rw
+./target/release/rustic6502 nodes --by-node
+```
+
+Then pass `--trace-node` to `run`. It takes names, wildcard patterns (`*`
+alone is every named node) or raw node numbers (traced as `n<number>`). You
+can repeat it or separate entries with commas:
+
+```sh
+./target/release/rustic6502 run --poke 0000:a942a2058e1100691085104c0b00 \
+    --stop-on-trap --trace-node 'clk0,rw,sync,ab*,db*' --trace-out run.vcd
+```
+
+`--trace-format vcd` (the default) writes a Value Change Dump that GTKWave
+and most HDL simulators can read. One time unit is one half-cycle, all
+signals are in a module named after the chip, and names that aren't plain
+Verilog identifiers (like `#(A+B)0`) are written as escaped identifiers
+(`\#(A+B)0`). `--trace-format table` writes a `# half_cycle name...`
+header, then one line per half-cycle with the half-cycle number and a `0`
+or `1` for each node, which is easy to `$fscanf` from a testbench. The first
+sample (half-cycle 0) is the state right after reset. Each sample is taken
+after the clock edge and the bus have settled.
+
+From Rust, use `Probe::resolve` and `NodeTracer` (in `src/trace.rs`), and
+call `NodeTracer::sample` after each `Cpu6502::half_step`.
+
 ### Tests
 
 This includes a few unit tests, which can be run with:
