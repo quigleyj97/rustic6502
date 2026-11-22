@@ -12,6 +12,10 @@
 //!   high (charge stored on the gate capacitance).
 //! * When a node changes, the transistors it gates toggle and their channel
 //!   nodes are scheduled for recalculation, until the netlist settles.
+//! * Under [`Process::Nmos`] (the default), a large group that would be
+//!   raised by pull-up resistors alone waits until everything else has
+//!   settled: depletion loads charge a bus slowly, so on the real chip
+//!   a latch closing on the same clock edge sees the bus still low.
 //!
 //! The simulator knows nothing about the 6502; see [`crate::cpu`] for that.
 
@@ -21,16 +25,45 @@ use crate::netlist::{Netlist, NodeId};
 /// a stable digital netlist never comes close.
 const MAX_ITERATIONS: usize = 100;
 
+/// Under [`Process::Nmos`], the smallest group whose pull-up-only rise is
+/// treated as slow. Group size stands in for capacitance (the netlist has no
+/// node areas): it excludes the very common pair of a pulled-up node and the
+/// storage node behind one pass transistor, while every bus conflict seen in
+/// the unofficial opcodes involves six or more nodes.
+const SLOW_PULLUP_MIN_GROUP: usize = 3;
+
 #[inline]
 fn drive_value(d: Drive) -> bool {
-    matches!(d, Drive::Vcc | Drive::Pullup | Drive::Hi)
+    matches!(d, Drive::Vcc | Drive::DrivenHi | Drive::Pullup | Drive::Hi)
+}
+
+/// The semiconductor process a netlist is built in, which decides how
+/// [`Sim`] resolves the cases a pure switch model cannot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Process {
+    /// Depletion-load NMOS (the original 6502). Pull-ups are resistive and
+    /// weak: a node pulled low by a transistor wins against them at once,
+    /// but a group left to a pull-up alone charges slowly. A low-to-high
+    /// rise caused only by pull-up resistors is therefore deferred until
+    /// every other pending event has settled, so a clock edge that closes
+    /// a latch beats a bus that is still charging. This is what gives the
+    /// unofficial opcodes their AND-like results.
+    #[default]
+    Nmos,
+    /// Plain switch model: every transition settles in netlist order, as
+    /// in `chipsim.js` and perfect6502.
+    Ideal,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Drive {
     Nothing,
+    /// Stored charge.
     Hi,
+    /// A pull-up resistor.
     Pullup,
+    /// An externally driven-high pin.
+    DrivenHi,
     Pulldown,
     Vcc,
     Vss,
@@ -80,7 +113,7 @@ struct Node {
     /// settled in the current pass.
     group_mark: u32,
     done_mark: u32,
-    /// 0: floating, 1: pull-up resistor or driven high, 2: driven low.
+    /// 0: floating, 1: pull-up resistor, 2: driven low, 3: driven high.
     pull: u8,
     state: bool,
     queued: bool,
@@ -141,6 +174,13 @@ pub struct Sim {
     group: Vec<NodeId>,
     group_gen: u32,
     done_gen: u32,
+    /// Groups whose pull-up-only rise is waiting for the rest of the
+    /// netlist to settle (see [`Process::Nmos`]).
+    deferred: Vec<NodeId>,
+    /// False for the pass that applies `deferred`.
+    allow_defer: bool,
+
+    process: Process,
 
     /// Number of times recalculation hit [`MAX_ITERATIONS`].
     pub unstable_events: u64,
@@ -257,6 +297,9 @@ impl Sim {
             group: Vec::new(),
             group_gen: 0,
             done_gen: 0,
+            deferred: Vec::new(),
+            allow_defer: true,
+            process: Process::default(),
             unstable_events: 0,
         };
         s.reset_state();
@@ -282,10 +325,26 @@ impl Sim {
         self.done_gen = 0;
         self.nodes[self.vcc as usize].state = true;
         // Transistors gated by vcc are permanently on.
+        self.ensure_next_capacity();
         let (a, b) = self.gate_range(self.vcc);
         for k in a..b {
             self.switch(self.gates[k], true);
         }
+        // `switch` scheduled their channel nodes; leave them for the next
+        // recalculation rather than marked as queued forever.
+        for n in self.next.drain(..) {
+            self.nodes.0[n as usize].queued = false;
+        }
+    }
+
+    /// Select how ambiguous transitions are resolved (default
+    /// [`Process::Nmos`]). Takes effect from the next recalculation.
+    pub fn set_process(&mut self, process: Process) {
+        self.process = process;
+    }
+
+    pub fn process(&self) -> Process {
+        self.process
     }
 
     pub fn node_count(&self) -> usize {
@@ -300,7 +359,7 @@ impl Sim {
     /// Externally drive a node (like an input pad) without recalculating.
     #[inline]
     pub fn drive(&mut self, n: NodeId, high: bool) {
-        self.nodes.0[n as usize].pull = if high { 1 } else { 2 };
+        self.nodes.0[n as usize].pull = if high { 3 } else { 2 };
     }
 
     /// Drive a node high and propagate.
@@ -338,6 +397,8 @@ impl Sim {
         }
         self.next.clear();
         self.ensure_next_capacity();
+        self.deferred.clear();
+        self.allow_defer = true;
         let mut iter = 0;
         while !list.is_empty() {
             if iter == MAX_ITERATIONS {
@@ -346,6 +407,7 @@ impl Sim {
                     self.nodes[n as usize].queued = false;
                 }
                 list.clear();
+                self.deferred.clear();
                 break;
             }
             iter += 1;
@@ -363,6 +425,21 @@ impl Sim {
             std::mem::swap(&mut list, &mut self.next);
             self.next.clear();
             self.ensure_next_capacity();
+            // Everything fast has settled: let the slow rises happen (they
+            // are recalculated from scratch, so any that no longer apply
+            // are dropped), then carry on with whatever they set off.
+            self.allow_defer = !list.is_empty() || self.deferred.is_empty();
+            if !self.allow_defer {
+                let mut deferred = std::mem::take(&mut self.deferred);
+                for &n in &deferred {
+                    if !self.nodes[n as usize].queued {
+                        self.nodes[n as usize].queued = true;
+                        list.push(n);
+                    }
+                }
+                deferred.clear();
+                self.deferred = deferred;
+            }
         }
         self.list = list;
     }
@@ -421,13 +498,15 @@ impl Sim {
 
     #[inline]
     fn node_drive(&self, m: usize) -> Drive {
-        const TABLE: [Drive; 6] = [
+        const TABLE: [Drive; 8] = [
             Drive::Nothing,
             Drive::Hi,
             Drive::Pullup,
             Drive::Pullup,
             Drive::Pulldown,
             Drive::Pulldown,
+            Drive::DrivenHi,
+            Drive::DrivenHi,
         ];
         // Selects rather than branches: rail state is data-dependent.
         let node = &self.nodes[m];
@@ -471,8 +550,13 @@ impl Sim {
                 return;
             }
         }
-        let value = drive_value(self.build_group(n));
+        let drive = self.build_group(n);
+        let value = drive_value(drive);
         let group = std::mem::take(&mut self.group);
+        if drive == Drive::Pullup && self.defer_slow_rise(n, &group) {
+            self.group = group;
+            return;
+        }
         for &m in &group {
             let mi = m as usize;
             self.nodes[mi].done_mark = self.done_gen;
@@ -481,6 +565,26 @@ impl Sim {
             }
         }
         self.group = group;
+    }
+
+    /// A large group about to be raised by pull-up resistors alone:
+    /// under [`Process::Nmos`], postpone that until the fast events have
+    /// settled. Returns whether it was postponed (the group is then marked
+    /// done for this pass and left unchanged).
+    #[inline]
+    fn defer_slow_rise(&mut self, n: NodeId, group: &[NodeId]) -> bool {
+        if self.process != Process::Nmos
+            || group.len() < SLOW_PULLUP_MIN_GROUP
+            || !self.allow_defer
+            || !group.iter().any(|&m| !self.nodes[m as usize].state)
+        {
+            return false;
+        }
+        for &m in group {
+            self.nodes[m as usize].done_mark = self.done_gen;
+        }
+        self.deferred.push(n);
+        true
     }
 
     /// The node at the other end of `n`'s only conducting pass transistor.
@@ -601,6 +705,32 @@ mod tests {
         assert!(s.is_high(4), "q keeps its charge");
         s.set_high(2);
         assert!(!s.is_high(4));
+    }
+
+    /// A bus held low through a pass transistor gated by `in`, with a
+    /// pull-up of its own, feeds a latch whose enable is `in` delayed by two
+    /// inverters. When `in` falls the bus loses its pull-down two steps
+    /// before the latch closes. An ideal switch model lets the pull-up win
+    /// that race; NMOS keeps the latched 0.
+    #[test]
+    fn slow_pullup_loses_race_with_latch() {
+        // 2 in, 3 d (always low), 4 and 8 bus (pull-up on 4), 5 latch,
+        // 6 /in, 7 enable
+        let text = "rustic6502-netlist 1\nvcc 1\nvss 0\npullup 4 6 7\n\
+                    t t0 1 3 0\nt t1 2 3 4\nt t2 7 4 5\n\
+                    t t3 2 6 0\nt t4 6 7 0\nt t5 1 4 8\n";
+        let nl = Netlist::from_native(text).unwrap();
+        for (process, latched) in [(Process::Ideal, true), (Process::Nmos, false)] {
+            let mut s = Sim::new(&nl);
+            s.set_process(process);
+            s.set_high(2);
+            s.recalc_all();
+            assert!(s.is_high(7) && !s.is_high(4) && !s.is_high(5));
+            s.set_low(2);
+            assert!(!s.is_high(7), "latch closed");
+            assert!(s.is_high(4), "bus pulled up once undriven");
+            assert_eq!(s.is_high(5), latched, "{process:?}");
+        }
     }
 
     /// `Vec::clone` drops spare capacity, which the work lists rely on; a

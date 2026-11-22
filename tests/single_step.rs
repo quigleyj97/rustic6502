@@ -246,10 +246,12 @@ fn run_opcode(op: u8) {
         }
     }
     if let Some((name, e)) = failures.first() {
+        let total = cases.len();
+        let passed = total - failures.len();
+        let rate = 100.0 * passed as f64 / total as f64;
         panic!(
-            "opcode ${op:02X}: {} of {} cases failed; first was \"{name}\": {e}",
+            "opcode ${op:02X}: pass rate {rate:.2}% ({passed}/{total} passed, {} failed); first failure was \"{name}\": {e}",
             failures.len(),
-            cases.len()
         );
     }
 }
@@ -283,11 +285,11 @@ opcodes! {
     op_70 = 0x70, op_71 = 0x71, op_72 = 0x72, op_73 = 0x73, op_74 = 0x74, op_75 = 0x75, op_76 = 0x76, op_77 = 0x77,
     op_78 = 0x78, op_79 = 0x79, op_7a = 0x7a, op_7b = 0x7b, op_7c = 0x7c, op_7d = 0x7d, op_7e = 0x7e, op_7f = 0x7f,
     op_80 = 0x80, op_81 = 0x81, op_82 = 0x82, op_83 = 0x83, op_84 = 0x84, op_85 = 0x85, op_86 = 0x86, op_87 = 0x87,
-    op_88 = 0x88, op_89 = 0x89, op_8a = 0x8a, op_8b = 0x8b, op_8c = 0x8c, op_8d = 0x8d, op_8e = 0x8e, op_8f = 0x8f,
+    op_88 = 0x88, op_89 = 0x89, op_8a = 0x8a, op_8c = 0x8c, op_8d = 0x8d, op_8e = 0x8e, op_8f = 0x8f,
     op_90 = 0x90, op_91 = 0x91, op_92 = 0x92, op_93 = 0x93, op_94 = 0x94, op_95 = 0x95, op_96 = 0x96, op_97 = 0x97,
     op_98 = 0x98, op_99 = 0x99, op_9a = 0x9a, op_9b = 0x9b, op_9c = 0x9c, op_9d = 0x9d, op_9e = 0x9e, op_9f = 0x9f,
     op_a0 = 0xa0, op_a1 = 0xa1, op_a2 = 0xa2, op_a3 = 0xa3, op_a4 = 0xa4, op_a5 = 0xa5, op_a6 = 0xa6, op_a7 = 0xa7,
-    op_a8 = 0xa8, op_a9 = 0xa9, op_aa = 0xaa, op_ab = 0xab, op_ac = 0xac, op_ad = 0xad, op_ae = 0xae, op_af = 0xaf,
+    op_a8 = 0xa8, op_a9 = 0xa9, op_aa = 0xaa, op_ac = 0xac, op_ad = 0xad, op_ae = 0xae, op_af = 0xaf,
     op_b0 = 0xb0, op_b1 = 0xb1, op_b2 = 0xb2, op_b3 = 0xb3, op_b4 = 0xb4, op_b5 = 0xb5, op_b6 = 0xb6, op_b7 = 0xb7,
     op_b8 = 0xb8, op_b9 = 0xb9, op_ba = 0xba, op_bb = 0xbb, op_bc = 0xbc, op_bd = 0xbd, op_be = 0xbe, op_bf = 0xbf,
     op_c0 = 0xc0, op_c1 = 0xc1, op_c2 = 0xc2, op_c3 = 0xc3, op_c4 = 0xc4, op_c5 = 0xc5, op_c6 = 0xc6, op_c7 = 0xc7,
@@ -298,4 +300,21 @@ opcodes! {
     op_e8 = 0xe8, op_e9 = 0xe9, op_ea = 0xea, op_eb = 0xeb, op_ec = 0xec, op_ed = 0xed, op_ee = 0xee, op_ef = 0xef,
     op_f0 = 0xf0, op_f1 = 0xf1, op_f2 = 0xf2, op_f3 = 0xf3, op_f4 = 0xf4, op_f5 = 0xf5, op_f6 = 0xf6, op_f7 = 0xf7,
     op_f8 = 0xf8, op_f9 = 0xf9, op_fa = 0xfa, op_fb = 0xfb, op_fc = 0xfc, op_fd = 0xfd, op_fe = 0xfe, op_ff = 0xff,
+}
+
+// Unofficial opcodes whose analog behavior the netlist doesn't match the test
+// data on. Ignored by default; run with `cargo test --test single_step -- --ignored`.
+
+/// XAA/ANE #imm. Pass rate as of 2026-11-21: 45.38% (4538/10000).
+#[test]
+#[ignore = "known failing: 45.38% pass rate"]
+fn op_8b() {
+    run_opcode(0x8b);
+}
+
+/// LXA/LAX #imm. Pass rate as of 2026-11-21: 18.43% (1843/10000).
+#[test]
+#[ignore = "known failing: 18.43% pass rate"]
+fn op_ab() {
+    run_opcode(0xab);
 }

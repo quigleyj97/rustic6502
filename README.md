@@ -73,6 +73,37 @@ git submodule update --init
 cargo test --release --test klaus -- --ignored
 ```
 
+### Undocumented opcodes
+
+Most undocumented opcodes for the NMOS 6502 are implemented and working, in a
+way that matches the original silicon. In fact, rustic6502 can handle opcodes
+that visual6502 and (ironically) perfect6502 cannot:
+
+- `0x0B - ANC`
+- `0x2B - ANC`
+- `0x4B - ALR`
+- `0x6B - ARR`
+- `0xBB - LAS`
+
+This is because those simulators do not correctly model the NMOS behavior when
+multiple transistors are driving the same silicon. rustic6502 does when set to
+NMOS simulation mode, and thus handles these opcodes correctly.
+
+2 opcodes do not correctly simulate, however:
+
+- `0x8B - XAA` (aka `ANE`)
+- `0xAB - LXA`
+
+These rely on open bus behavior that can vary by manufacturer, stepping, device,
+or even device configuration (for instance, NES carts can induce different open
+bus behavior than external debuggers).
+
+They remain unsupported- `rustic6502` currently passes ~45% of `XAA` tests and
+`~18%` of `LXA` tests from Tom Harte's SingleStepTests repo (specifically, the
+NMOS 6502 with BCD). It's unclear exactly which chip was used for these tests,
+or the test setup, so I can't reliably reference them here. I should do real
+hardware tests myself on this, but that's a problem for another day.
+
 ### Benchmarking
 
 `examples/bench.rs` mirrors perfect6502's `make benchmark`: it boots
