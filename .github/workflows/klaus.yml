@@ -1,0 +1,27 @@
+name: Klaus functional test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  klaus:
+    runs-on: ubuntu-latest
+    # The test takes roughly 18 minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Klaus test submodule
+        run: git submodule update --init --depth 1 tests/6502_65C02_functional_tests
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run Klaus functional test
+        run: cargo test --release --locked --test klaus -- --ignored --nocapture

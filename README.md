@@ -8,6 +8,8 @@ netlists are converted from the netlist files Chipsim uses in
 [Visual6502](https://github.com/trebonian/visual6502), and are simulated
 similarly.
 
+Docs: [quigleyj97.github.io/rustic6502](https://quigleyj97.github.io/rustic6502/rustic6502/index.html)
+
 ## Building
 
 To build this simulator, run `cargo build` for a debug build or
