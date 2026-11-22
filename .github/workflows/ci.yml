@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The single-step tests need only the 6502/ directory of this (large)
+      # submodule, so fetch it shallow and sparse. The Klaus submodule is tiny.
+      - name: Fetch test data submodules
+        run: |
+          git submodule update --init --depth 1 tests/6502_65C02_functional_tests
+          git submodule update --init --depth 1 --filter=blob:none tests/65x02
+          git -C tests/65x02 sparse-checkout set 6502
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --all-targets --locked
+
+      - name: Test
+        run: cargo test --locked
