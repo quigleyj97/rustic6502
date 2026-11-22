@@ -176,7 +176,7 @@ simulation still runs. A missing `pN` flag is shown as unknown.
   and field 6 (weak). The coordinate fields are dropped.
 - **Names** come from `nodenames.js`. Entries with a negative node number are
   skipped.
-- **Rails**: VCC is the node named `vcc`. Ground is the node named by
+- **Rails**: VCC is the node named by `--vcc` (default `vcc`). Ground is the node named by
   `--vss`, or else `vss`, or else `gnd`.
 - `--chip` sets the `chip` record (default `6502`), and `--keep-weak` keeps
   weak transistors.

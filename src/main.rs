@@ -32,6 +32,9 @@ enum Cmd {
         /// Chip name recorded in the output.
         #[arg(long, default_value = "6502")]
         chip: String,
+        /// Name of the power supply node.
+        #[arg(long, default_value = "vcc")]
+        vcc: String,
         /// Name of the ground node (default: vss, then gnd).
         #[arg(long)]
         vss: Option<String>,
@@ -139,11 +142,13 @@ fn main() -> ExitCode {
             dir,
             output,
             chip,
+            vcc,
             vss,
             keep_weak,
         } => (|| {
             let opts = Visual6502Options {
                 chip,
+                vcc_name: vcc,
                 vss_name: vss,
                 ignore_weak: !keep_weak,
                 ..Default::default()
