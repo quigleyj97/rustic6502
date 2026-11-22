@@ -1,5 +1,8 @@
 # rustic6502
 
+[![CI](https://github.com/quigleyj97/rustic6502/actions/workflows/ci.yml/badge.svg)](https://github.com/quigleyj97/rustic6502/actions/workflows/ci.yml)
+[![Docs](https://github.com/quigleyj97/rustic6502/actions/workflows/docs.yml/badge.svg)](https://quigleyj97.github.io/rustic6502/)
+
 A transistor-level 6502 (and family) netlist simulator written in Rust. The
 netlists are converted from the netlist files Chipsim uses in
 [Visual6502](https://github.com/trebonian/visual6502), and are simulated
