@@ -14,13 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The single-step tests need only the 6502/ directory of this (large)
+      # The single-step tests need only the 6502/ and nes6502/ directories of this (large)
       # submodule, so fetch it shallow and sparse. The Klaus submodule is tiny.
       - name: Fetch test data submodules
         run: |
           git submodule update --init --depth 1 tests/6502_65C02_functional_tests
           git submodule update --init --depth 1 --filter=blob:none tests/65x02
-          git -C tests/65x02 sparse-checkout set 6502
+          git -C tests/65x02 sparse-checkout set 6502 nes6502
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -29,4 +29,4 @@ jobs:
         run: cargo build --all-targets --locked
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --release
