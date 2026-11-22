@@ -5,6 +5,12 @@
 //! `handleBusWrite`): when `clk0` falls the memory places the byte at the
 //! address bus onto the data bus (if `rw` is high); when `clk0` rises a
 //! pending write (`rw` low) is committed to memory.
+//!
+//! The chip is always clocked through its clock input pin (`clk_in`, or
+//! `clk0` when there is no separate input). On chips with an on-chip clock
+//! divider, such as the 2A03, `clk0` is the divider's output and
+//! [`Netlist::clock_ratio`] says how many input toggles make one CPU
+//! half-cycle.
 
 use crate::netlist::{Netlist, NodeId};
 use crate::sim::Sim;
@@ -12,6 +18,9 @@ use crate::sim::Sim;
 /// Node numbers for the pads and registers used by the driver.
 #[derive(Debug, Clone)]
 pub struct Pins {
+    /// The clock input pin the simulator toggles.
+    pub clk_in: NodeId,
+    /// The CPU clock phase (phi0). The same node as `clk_in` on the 6502.
     pub clk0: NodeId,
     pub res: NodeId,
     pub rw: NodeId,
@@ -78,8 +87,10 @@ impl Pins {
             })
         })()
         .ok();
+        let clk0 = first(&["clk0", "phi0", "clk"])?;
         Ok(Pins {
-            clk0: first(&["clk0", "phi0", "clk"])?,
+            clk_in: nl.node("clk_in").unwrap_or(clk0),
+            clk0,
             res: first(&["res", "reset"])?,
             rw: get("rw")?,
             sync: get("sync")?,
@@ -156,6 +167,8 @@ pub struct Cpu6502 {
     pub memory: Box<[u8; 0x10000]>,
     /// Half-cycles since the end of reset.
     pub half_cycles: u64,
+    /// Clock input toggles per CPU half-cycle, from [`Netlist::clock_ratio`].
+    pub clock_ratio: u32,
     /// Called for every bus write with (address, value).
     /// `Send` so a whole `Cpu6502` can be moved to another thread.
     pub on_write: Option<Box<dyn FnMut(u16, u8) + Send>>,
@@ -169,6 +182,7 @@ impl Cpu6502 {
             pins,
             memory: Box::new([0; 0x10000]),
             half_cycles: 0,
+            clock_ratio: nl.clock_ratio.max(1),
             on_write: None,
         })
     }
@@ -178,15 +192,15 @@ impl Cpu6502 {
         let p = self.pins.clone();
         self.sim.reset_state();
         self.sim.drive(p.res, false);
-        self.sim.drive(p.clk0, false);
+        self.sim.drive(p.clk_in, false);
         self.sim.drive(p.rdy, true);
         self.sim.drive(p.so, false);
         self.sim.drive(p.irq, true);
         self.sim.drive(p.nmi, true);
         self.sim.recalc_all();
-        for _ in 0..8 {
-            self.sim.set_high(p.clk0);
-            self.sim.set_low(p.clk0);
+        for _ in 0..8 * self.clock_ratio {
+            self.sim.set_high(p.clk_in);
+            self.sim.set_low(p.clk_in);
         }
         self.sim.set_high(p.res);
         for _ in 0..18 {
@@ -195,15 +209,19 @@ impl Cpu6502 {
         self.half_cycles = 0;
     }
 
-    /// Advance one clock phase, servicing the bus.
+    /// Advance one CPU clock phase, servicing the bus: toggle the clock
+    /// input `clock_ratio` times, then read or write memory according to the
+    /// phase `clk0` ended up in.
     pub fn half_step(&mut self) {
-        let clk0 = self.pins.clk0;
-        if self.sim.is_high(clk0) {
-            self.sim.set_low(clk0);
-            self.handle_bus_read();
-        } else {
-            self.sim.set_high(clk0);
+        let clk_in = self.pins.clk_in;
+        for _ in 0..self.clock_ratio {
+            let high = self.sim.is_high(clk_in);
+            self.sim.set(clk_in, !high);
+        }
+        if self.clk0() {
             self.handle_bus_write();
+        } else {
+            self.handle_bus_read();
         }
         self.half_cycles += 1;
     }

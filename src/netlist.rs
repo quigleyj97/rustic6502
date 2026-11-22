@@ -50,6 +50,10 @@ pub struct Netlist {
     pub names: BTreeMap<String, NodeId>,
     pub vcc: NodeId,
     pub vss: NodeId,
+    /// Toggles of the clock input pin per CPU half-cycle: 1 for a chip
+    /// clocked directly (the 6502), 12 for the NTSC 2A03, whose on-chip
+    /// divider makes the CPU clock from a ~21.48 MHz master clock.
+    pub clock_ratio: u32,
 }
 
 #[derive(Debug)]
@@ -77,6 +81,8 @@ pub struct Visual6502Options {
     pub vss_name: Option<String>,
     /// Drop transistors flagged as weak (as the 6800 support code does).
     pub ignore_weak: bool,
+    /// Recorded as [`Netlist::clock_ratio`].
+    pub clock_ratio: u32,
 }
 
 impl Default for Visual6502Options {
@@ -86,6 +92,7 @@ impl Default for Visual6502Options {
             vcc_name: "vcc".into(),
             vss_name: None,
             ignore_weak: true,
+            clock_ratio: 1,
         }
     }
 }
@@ -254,6 +261,7 @@ impl Netlist {
             names: name_map,
             vcc,
             vss,
+            clock_ratio: opts.clock_ratio,
         };
         nl.validate()?;
         Ok(nl)
@@ -278,6 +286,9 @@ impl Netlist {
         if self.vcc == self.vss {
             return err("vcc and vss are the same node");
         }
+        if self.clock_ratio == 0 {
+            return err("clock-ratio must be at least 1");
+        }
         Ok(())
     }
 
@@ -289,6 +300,9 @@ impl Netlist {
         let _ = writeln!(s, "nodes {}", self.node_count);
         let _ = writeln!(s, "vcc {}", self.vcc);
         let _ = writeln!(s, "vss {}", self.vss);
+        if self.clock_ratio != 1 {
+            let _ = writeln!(s, "clock-ratio {}", self.clock_ratio);
+        }
         let ups: Vec<String> = (0..self.node_count)
             .filter(|&n| self.pullup[n as usize])
             .map(|n| n.to_string())
@@ -321,6 +335,7 @@ impl Netlist {
     /// nodes <count>              (optional; inferred otherwise)
     /// vcc <node> | vcc <name>
     /// vss <node> | vss <name>
+    /// clock-ratio <n>            (optional; default 1)
     /// pullup <node> <node> ...
     /// t <name> <gate> <c1> <c2> [weak]
     /// n <name> <node>
@@ -335,6 +350,7 @@ impl Netlist {
         }
         let mut chip = String::from("unknown");
         let mut declared_nodes: Option<u32> = None;
+        let mut clock_ratio = 1;
         let mut vcc_s = None;
         let mut vss_s = None;
         let mut ups = Vec::new();
@@ -359,6 +375,14 @@ impl Netlist {
                 "chip" => chip = rest.join(" "),
                 "nodes" => {
                     declared_nodes = Some(num(rest.first().ok_or_else(|| ctx("missing count"))?)?)
+                }
+                "clock-ratio" => {
+                    let r = rest.first().ok_or_else(|| ctx("missing ratio"))?;
+                    clock_ratio = r
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|&r| r > 0)
+                        .ok_or_else(|| ctx(&format!("bad clock ratio '{r}'")))?;
                 }
                 "vcc" => vcc_s = rest.first().map(|s| s.to_string()),
                 "vss" => vss_s = rest.first().map(|s| s.to_string()),
@@ -432,6 +456,7 @@ impl Netlist {
             names,
             vcc,
             vss,
+            clock_ratio,
         };
         nl.validate()?;
         Ok(nl)
@@ -753,5 +778,16 @@ mod tests {
             "rustic6502-netlist 1\nchip x\nvcc 1\nvss 0\nt t0 2 3 0\nn reset 2\nalias res reset\n";
         let nl = Netlist::from_native(t).unwrap();
         assert_eq!(nl.node("res"), Some(2));
+    }
+
+    #[test]
+    fn native_clock_ratio() {
+        let base = "rustic6502-netlist 1\nvcc 1\nvss 0\nt t0 2 3 0\n";
+        assert_eq!(Netlist::from_native(base).unwrap().clock_ratio, 1);
+        let nl = Netlist::from_native(&format!("{base}clock-ratio 12\n")).unwrap();
+        assert_eq!(nl.clock_ratio, 12);
+        assert_eq!(Netlist::from_native(&nl.to_native()).unwrap(), nl);
+        assert!(Netlist::from_native(&format!("{base}clock-ratio 0\n")).is_err());
+        assert!(Netlist::from_native(&format!("{base}clock-ratio x\n")).is_err());
     }
 }

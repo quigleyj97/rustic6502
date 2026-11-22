@@ -61,6 +61,7 @@ n clk0 1171
 | `nodes`  | `<count>`                        | no       | last wins  |
 | `vcc`    | `<node-or-name>`                 | yes      | last wins  |
 | `vss`    | `<node-or-name>`                 | yes      | last wins  |
+| `clock-ratio` | `<n>`                       | no       | last wins  |
 | `pullup` | `<node> <node> ...`              | no       | yes        |
 | `t`      | `<name> <gate> <c1> <c2> [weak]` | no       | yes        |
 | `n`      | `<name> <node>`                  | no       | yes        |
@@ -88,6 +89,16 @@ number, even when a node has that name.
 
 The simulator holds these nodes at fixed levels. Transistors connecting a
 node to a rail act as pull-ups or pull-downs.
+
+#### `clock-ratio <n>`
+
+How many times the simulator toggles the clock input pin per CPU
+half-cycle. A positive integer that defaults to `1`, which suits the 6502,
+whose clock pad is the CPU clock. Chips with an on-chip clock divider need a
+larger value. The NTSC 2A03 divides its ~21.48 MHz master clock by 12, so
+one CPU half-cycle is 6 master cycles (12 toggles) and its netlist uses
+`clock-ratio 12`. `to_native` writes this record only when the value is not
+1.
 
 #### `pullup <node> <node> ...`
 
@@ -151,7 +162,8 @@ any of the required ones are missing:
 
 | Signal      | Name(s)                                    | Required |
 | ----------- | ------------------------------------------ | -------- |
-| Clock input | first of `clk0`, `phi0`, `clk`             | yes      |
+| CPU clock   | first of `clk0`, `phi0`, `clk`             | yes      |
+| Clock input | `clk_in`; if missing, the CPU clock node   | no       |
 | Reset       | first of `res`, `reset`                    | yes      |
 | Pins        | `rw`, `sync`, `rdy`, `irq`, `nmi`, `so`    | yes      |
 | Address bus | `ab0` … `ab15`                             | yes      |
@@ -159,6 +171,13 @@ any of the required ones are missing:
 | Registers   | `a0`–`a7`, `x0`–`x7`, `y0`–`y7`, `s0`–`s7` | no       |
 |             | `pcl0`–`pcl7`, `pch0`–`pch7`, `ir0`–`ir7`  | no       |
 | Flags       | `p0` … `p7` (each individually)            | no       |
+
+The simulator toggles the clock input `clock-ratio` times per half-step.
+After that it services the bus according to the CPU clock node: when that
+node is low it drives the data bus for a read, and when it is high it
+commits a pending write. On the 6502 both are the `clk0` pad. On the 2A03
+`clk_in` is the external clock pin and `clk0` is the on-chip divider's
+output.
 
 The register names are used only for tracing. If any of `a`, `x`, `y`, `s`,
 `pcl`, `pch` or `ir` is incomplete, register tracing is turned off; the
@@ -178,8 +197,10 @@ simulation still runs. A missing `pN` flag is shown as unknown.
   skipped.
 - **Rails**: VCC is the node named by `--vcc` (default `vcc`). Ground is the node named by
   `--vss`, or else `vss`, or else `gnd`.
-- `--chip` sets the `chip` record (default `6502`), and `--keep-weak` keeps
-  weak transistors.
+- `--chip` sets the `chip` record (default `6502`), `--keep-weak` keeps
+  weak transistors, and `--clock-ratio` sets the `clock-ratio` record.
 
 The `--netlist` option of `run` and `info` also accepts a Visual6502 data
 directory directly, in which case it is converted in memory at load time.
+Such a directory has no `clock-ratio` record, so pass `run --clock-ratio`
+(which overrides the netlist's value) for chips that need one.

@@ -41,6 +41,10 @@ enum Cmd {
         /// Keep transistors flagged as weak.
         #[arg(long)]
         keep_weak: bool,
+        /// Clock input toggles per CPU half-cycle, for chips with an on-chip
+        /// clock divider (12 for the NTSC 2A03).
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+        clock_ratio: u32,
     },
     /// Print statistics about a netlist.
     Info {
@@ -66,6 +70,10 @@ struct RunArgs {
     /// directory. Defaults to the netlist built into the binary.
     #[arg(long)]
     netlist: Option<String>,
+    /// Clock input toggles per CPU half-cycle, overriding the netlist's
+    /// `clock-ratio` (12 for the NTSC 2A03).
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    clock_ratio: Option<u32>,
     /// Load a binary file into memory: ADDR:FILE (ADDR in hex).
     #[arg(long, value_name = "ADDR:FILE")]
     load: Vec<String>,
@@ -145,13 +153,14 @@ fn main() -> ExitCode {
             vcc,
             vss,
             keep_weak,
+            clock_ratio,
         } => (|| {
             let opts = Visual6502Options {
                 chip,
                 vcc_name: vcc,
                 vss_name: vss,
                 ignore_weak: !keep_weak,
-                ..Default::default()
+                clock_ratio,
             };
             let nl = Netlist::from_visual6502_dir(&dir, &opts).map_err(|e| e.to_string())?;
             let text = nl.to_native();
@@ -174,6 +183,7 @@ fn main() -> ExitCode {
             println!("pull-ups:    {}", nl.pullup.iter().filter(|&&p| p).count());
             println!("names:       {}", nl.names.len());
             println!("vcc/vss:     {}/{}", nl.vcc, nl.vss);
+            println!("clock ratio: {}", nl.clock_ratio);
             match rustic6502::cpu::Pins::from_netlist(&nl) {
                 Ok(p) => println!(
                     "6502 pads:   ok (registers {})",
@@ -221,6 +231,9 @@ fn main() -> ExitCode {
 fn run(args: RunArgs) -> Result<bool, String> {
     let nl = load_netlist(args.netlist.as_deref())?;
     let mut cpu = Cpu6502::new(&nl)?;
+    if let Some(r) = args.clock_ratio {
+        cpu.clock_ratio = r;
+    }
     for l in &args.load {
         let (addr, file) = split_addr(l)?;
         let data = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
